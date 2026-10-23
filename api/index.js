@@ -409,7 +409,7 @@ export function createHandler({
   async function ask(text, oldHistory, signal) {
     const attemptSignal = AbortSignal.any([
       signal,
-      AbortSignal.timeout(24000)
+      AbortSignal.timeout(34000)
     ]);
 
     const [model, context] = await Promise.all([
@@ -466,7 +466,7 @@ export function createHandler({
       const r = await net(
         url,
         options,
-        18000,
+        30000,
         attemptSignal
       );
 
