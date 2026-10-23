@@ -407,9 +407,14 @@ export function createHandler({
   }
 
   async function ask(text, oldHistory, signal) {
+    const attemptSignal = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(24000)
+    ]);
+
     const [model, context] = await Promise.all([
-      chooseModel(signal),
-      search(text, signal)
+      chooseModel(attemptSignal),
+      search(text, attemptSignal)
     ]);
 
     console.info(
@@ -417,51 +422,104 @@ export function createHandler({
       /^[\w.-]{1,100}$/.test(model) ? model : 'INVALID_ID'
     );
 
-    const r = await net(
+    const url =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
-        encodeURIComponent(model) +
-        ':generateContent',
-      {
-        method: 'POST',
-        headers: {
-          'x-goog-api-key': env.GEMINI_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: SYSTEM }]
-          },
-          contents: [
-            ...history(oldHistory).map(x => ({
-              role: x.role,
-              parts: [{ text: x.text }]
-            })),
-            {
-              role: 'user',
-              parts: [
-                {
-                  text:
-                    text +
-                    (context
-                      ? '\nРезультаты поиска:\n' + context
-                      : '')
-                }
-              ]
-            }
-          ],
-          generationConfig: {
-            maxOutputTokens: 2048,
-            temperature: 0.5
-          }
-        })
-      },
-      18000,
-      signal
-    );
+      encodeURIComponent(model) +
+      ':generateContent';
 
-    if (!r.ok) {
-      throw serviceError('GEMINI', r.status);
+    const options = {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': env.GEMINI_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: SYSTEM }]
+        },
+        contents: [
+          ...history(oldHistory).map(x => ({
+            role: x.role,
+            parts: [{ text: x.text }]
+          })),
+          {
+            role: 'user',
+            parts: [{
+              text:
+                text +
+                (context
+                  ? '\nРезультаты поиска:\n' + context
+                  : '')
+            }]
+          }
+        ],
+        generationConfig: {
+          maxOutputTokens: 2048,
+          temperature: 0.5
+        }
+      })
+    };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      attemptSignal.throwIfAborted();
+
+      const r = await net(
+        url,
+        options,
+        18000,
+        attemptSignal
+      );
+
+      if (!r.ok) {
+        const status = r.status;
+
+        // Освобождаем соединение перед повтором.
+        if (r.body) {
+          try {
+            await r.body.cancel();
+          } catch {}
+        }
+
+        if (
+          [500, 502, 503, 504].includes(status) &&
+          attempt < 2
+        ) {
+          console.warn(
+            'JARVIS_GEMINI_RETRY',
+            'http=' + status,
+            'attempt=' + (attempt + 1)
+          );
+
+          await sleep(
+            1000 * (2 ** attempt) +
+            Math.floor(Math.random() * 250)
+          );
+
+          continue;
+        }
+
+        throw serviceError('GEMINI', status);
+      }
+
+      const data = await r.json();
+
+      const answer = trimText(
+        (data.candidates?.[0]?.content?.parts || [])
+          .filter(x => !x.thought)
+          .map(x => x.text || '')
+          .join(''),
+        900
+      );
+
+      if (!answer) {
+        throw new Error('GEMINI_EMPTY');
+      }
+
+      return answer;
     }
+
+    throw new Error('GEMINI_HTTP_503');
+  }
 
     const data = await r.json();
 
