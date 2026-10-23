@@ -518,24 +518,7 @@ export function createHandler({
       return answer;
     }
 
-    throw new Error('GEMINI_HTTP_503');
-  }
-
-    const data = await r.json();
-
-    const answer = trimText(
-      (data.candidates?.[0]?.content?.parts || [])
-        .filter(x => !x.thought)
-        .map(x => x.text || '')
-        .join(''),
-      900
-    );
-
-    if (!answer) {
-      throw new Error('GEMINI_EMPTY');
-    }
-
-    return answer;
+       throw new Error('GEMINI_HTTP_503');
   }
 
   async function speak(text, signal) {
